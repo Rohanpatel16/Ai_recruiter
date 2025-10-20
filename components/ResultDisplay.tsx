@@ -1,6 +1,7 @@
+
 import React, { useState } from 'react';
 import type { AnalysisResult } from '../types';
-import { CheckCircleIcon, XCircleIcon, ThumbUpIcon, ThumbDownIcon, MinusCircleIcon } from './Icons';
+import { CheckCircleIcon, XCircleIcon, ThumbUpIcon, ThumbDownIcon, MinusCircleIcon, QuestionMarkCircleIcon } from './Icons';
 
 
 const RecommendationBadge: React.FC<{ recommendation: AnalysisResult['recommendation'] }> = ({ recommendation }) => {
@@ -103,6 +104,23 @@ export const ResultDisplay: React.FC<{ result: AnalysisResult }> = ({ result }) 
                 <h3 className="text-xl font-bold mb-2 text-gray-800 dark:text-gray-200">Final Verdict</h3>
                 <p className="text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-700/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">{result.finalVerdict}</p>
             </div>
+
+            {result.interviewQuestions && result.interviewQuestions.length > 0 && (
+              <div className="pt-4">
+                  <h3 className="text-xl font-bold mb-3 text-blue-600 dark:text-blue-400 flex items-center gap-2">
+                      <QuestionMarkCircleIcon className="h-6 w-6" />
+                      Suggested Interview Questions
+                  </h3>
+                  <ul className="space-y-3 pl-2">
+                      {result.interviewQuestions.map((question, index) => (
+                           <li key={index} className="flex items-start bg-gray-50 dark:bg-gray-700/50 p-3 rounded-md">
+                              <span className="text-blue-500 font-bold mr-3">{index + 1}.</span>
+                              <span className="text-gray-700 dark:text-gray-200">{question}</span>
+                          </li>
+                      ))}
+                  </ul>
+              </div>
+            )}
         </div>
     </div>
   );

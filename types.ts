@@ -6,4 +6,5 @@ export interface AnalysisResult {
   pros: string[];
   cons: string[];
   finalVerdict: string;
+  interviewQuestions: string[];
 }

@@ -32,9 +32,14 @@ const responseSchema = {
     finalVerdict: {
         type: Type.STRING,
         description: "A final, concluding statement on the candidate's suitability, explaining the reasoning behind the recommendation."
+    },
+    interviewQuestions: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "A list of 3-5 tailored interview questions to ask the candidate based on the analysis, particularly focusing on their potential weaknesses or areas that need further clarification."
     }
   },
-  required: ["relevancyScore", "recommendation", "summary", "pros", "cons", "finalVerdict"],
+  required: ["relevancyScore", "recommendation", "summary", "pros", "cons", "finalVerdict", "interviewQuestions"],
 };
 
 export async function analyzeResume(resume: string, jobDescription: string): Promise<AnalysisResult> {
@@ -51,7 +56,7 @@ export async function analyzeResume(resume: string, jobDescription: string): Pro
     ${resume}
     ---
 
-    Please provide your analysis in the specified JSON format. The relevancy score should be a number between 0 and 100. The recommendation must be one of the three specified options. The pros and cons should be concise bullet points.
+    Please provide your analysis in the specified JSON format. The relevancy score should be a number between 0 and 100. The recommendation must be one of the three specified options. The pros and cons should be concise bullet points. Also generate 3-5 insightful interview questions based on the candidate's resume, especially targeting any potential weaknesses or areas needing clarification.
   `;
 
   try {
@@ -75,7 +80,8 @@ export async function analyzeResume(resume: string, jobDescription: string): Pro
         typeof parsedResult.summary !== 'string' ||
         !Array.isArray(parsedResult.pros) ||
         !Array.isArray(parsedResult.cons) ||
-        typeof parsedResult.finalVerdict !== 'string'
+        typeof parsedResult.finalVerdict !== 'string' ||
+        !Array.isArray(parsedResult.interviewQuestions)
     ) {
         throw new Error('Received malformed data from API.');
     }
