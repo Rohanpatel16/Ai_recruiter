@@ -1,10 +1,11 @@
 
 export interface AnalysisResult {
   relevancyScore: number;
-  recommendation: 'HIRE' | 'CONSIDER' | 'DO NOT HIRE';
+  recommendation: 'Strong Hire' | 'Consider' | 'Reject';
   summary: string;
   pros: string[];
   cons: string[];
+  redFlags: string[];
   finalVerdict: string;
   interviewQuestions: string[];
 }
