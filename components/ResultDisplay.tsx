@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import type { AnalysisResult } from '../types';
 import { CheckCircleIcon, XCircleIcon, ThumbUpIcon, ThumbDownIcon, MinusCircleIcon, QuestionMarkCircleIcon } from './Icons';
@@ -49,11 +48,14 @@ const ScoreCircle: React.FC<{ score: number }> = ({ score }) => {
     );
 };
 
-export const ResultDisplay: React.FC<{ result: AnalysisResult }> = ({ result }) => {
+export const ResultDisplay: React.FC<{ name: string, result: AnalysisResult }> = ({ name, result }) => {
   return (
     <div className="bg-white dark:bg-gray-800 rounded-b-xl animate-fade-in">
         <div className="flex flex-col md:flex-row items-center justify-between gap-8 border-b border-gray-200 dark:border-gray-700 pb-6 mb-6">
             <div className="text-center md:text-left">
+                <p className="inline-block bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 font-semibold px-4 py-1.5 rounded-full text-base mb-4 truncate max-w-sm md:max-w-md lg:max-w-lg">
+                    {name}
+                </p>
                 <h2 className="text-3xl font-extrabold text-gray-900 dark:text-white mb-2">Analysis Complete</h2>
                 <RecommendationBadge recommendation={result.recommendation} />
             </div>
@@ -153,7 +155,7 @@ export const MultiResultDisplay: React.FC<{ results: { name: string; result: Ana
                 </nav>
             </div>
             <div className="p-6 md:p-8">
-                {results[activeIndex] && <ResultDisplay result={results[activeIndex].result} />}
+                {results[activeIndex] && <ResultDisplay name={results[activeIndex].name} result={results[activeIndex].result} />}
             </div>
         </div>
     );

@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import type { AnalysisResult } from '../types';
 
@@ -41,6 +40,47 @@ const responseSchema = {
   },
   required: ["relevancyScore", "recommendation", "summary", "pros", "cons", "finalVerdict", "interviewQuestions"],
 };
+
+const nameSchema = {
+    type: Type.OBJECT,
+    properties: {
+        fullName: {
+            type: Type.STRING,
+            description: "The full name of the candidate as found in the resume."
+        }
+    },
+    required: ["fullName"]
+};
+
+export async function extractCandidateName(resumeText: string): Promise<string> {
+    const prompt = `From the provided resume text, extract the full name of the candidate. Respond with a JSON object containing a single key 'fullName'. For example: {"fullName": "Jane Doe"}.
+
+    **Resume Text:**
+    ---
+    ${resumeText.substring(0, 2000)}
+    ---
+    `;
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: nameSchema,
+                temperature: 0,
+            }
+        });
+        const jsonText = response.text.trim();
+        const parsedResult = JSON.parse(jsonText);
+        if (typeof parsedResult.fullName === 'string' && parsedResult.fullName.length > 0) {
+            return parsedResult.fullName;
+        }
+        throw new Error('Full name not found or is invalid.');
+    } catch (error) {
+        console.error("Error extracting candidate name:", error);
+        throw new Error("Failed to extract candidate name from resume.");
+    }
+}
 
 export async function analyzeResume(resume: string, jobDescription: string): Promise<AnalysisResult> {
   const prompt = `

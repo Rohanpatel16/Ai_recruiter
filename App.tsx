@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { analyzeResume } from './services/geminiService';
+import { analyzeResume, extractCandidateName } from './services/geminiService';
 import type { AnalysisResult } from './types';
 import { FileUploadCard } from './components/InputCard';
 import { MultiResultDisplay } from './components/ResultDisplay';
@@ -49,6 +49,30 @@ const readPdfAsText = (file: File): Promise<string> => {
     });
 };
 
+const readPdfBlobAsText = async (blob: Blob): Promise<string> => {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.worker.mjs`;
+    try {
+        const arrayBuffer = await blob.arrayBuffer();
+        const typedArray = new Uint8Array(arrayBuffer);
+        const pdf = await window.pdfjsLib.getDocument(typedArray).promise;
+        const pagesPromises = Array.from({ length: pdf.numPages }, (_, i) => pdf.getPage(i + 1));
+        const pages = await Promise.all(pagesPromises);
+        let fullText = '';
+        for (const page of pages) {
+            const textContent = await page.getTextContent();
+            fullText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
+        }
+        return fullText;
+    } catch (err) {
+        console.error("PDF Parsing Error:", err);
+        throw new Error(`Failed to parse PDF from blob. It might be corrupted.`);
+    }
+};
+
+const readFileBlobAsText = (blob: Blob): Promise<string> => {
+    return blob.text();
+};
+
 
 const App: React.FC = () => {
   const [resumeFiles, setResumeFiles] = useState<File[]>([]);
@@ -79,7 +103,6 @@ const App: React.FC = () => {
 
       const settledResults = await Promise.all(analysisPromises);
       
-      // FIX: Use a type predicate to narrow the type of `r` so `r.value` is accessible in `map`.
       const successfulResults = settledResults
         .filter((r): r is { name: string; status: 'fulfilled'; value: AnalysisResult } => r.status === 'fulfilled')
         .map(r => ({ name: r.name, result: r.value }));
@@ -110,16 +133,47 @@ const App: React.FC = () => {
     setError(null);
     setResumeTexts([]);
 
-    const fileReadPromises = files.map(file => {
-      const promise = file.type === 'application/pdf'
-          ? readPdfAsText(file)
-          : readFileAsText(file);
-      return promise.then(text => ({ name: file.name, text }));
-    });
-
     try {
-        const results = await Promise.all(fileReadPromises);
-        setResumeTexts(results);
+        // 1. Parse files to get text
+        const fileReadPromises = files.map(file => {
+            const promise = file.type === 'application/pdf'
+                ? readPdfAsText(file)
+                : readFileAsText(file);
+            return promise.then(text => ({ originalName: file.name, text }));
+        });
+        const parsedFiles = await Promise.all(fileReadPromises);
+
+        // 2. Extract names using Gemini if there are files
+        if (parsedFiles.length > 0) {
+            setParsingMessage(`Extracting candidate names...`);
+            const nameExtractionPromises = parsedFiles.map(parsedFile =>
+                extractCandidateName(parsedFile.text)
+                    .catch(err => {
+                        console.error(`Failed to extract name for ${parsedFile.originalName}:`, err);
+                        return parsedFile.originalName; // Fallback to original filename on error
+                    })
+            );
+            const extractedNames = await Promise.all(nameExtractionPromises);
+
+            // 3. Ensure names are unique for display
+            const finalNames: string[] = [];
+            extractedNames.forEach(name => {
+                let newName = name;
+                let counter = 1;
+                while (finalNames.includes(newName)) {
+                    newName = `${name} (${counter})`;
+                    counter++;
+                }
+                finalNames.push(newName);
+            });
+            
+            // 4. Set state with new names
+            const newResumeTexts = parsedFiles.map((parsedFile, index) => ({
+                name: finalNames[index],
+                text: parsedFile.text,
+            }));
+            setResumeTexts(newResumeTexts);
+        }
     } catch (err) {
         setError(err instanceof Error ? err.message : 'An error occurred during file processing.');
     } finally {
@@ -129,20 +183,82 @@ const App: React.FC = () => {
 
   const handleJdFileRead = useCallback(async (file: File | null) => {
     if (!file) {
-      setJobDescriptionText('');
+      // Don't clear text if there's no file, allows for plain text entry
+      if (!jobDescriptionText) setJobDescriptionText('');
       return;
     }
     setParsingMessage('Parsing Job Description...');
     setError(null);
     try {
-      const text = await readFileAsText(file);
+      const text = file.type === 'application/pdf'
+          ? await readPdfAsText(file)
+          : await readFileAsText(file);
       setJobDescriptionText(text);
     } catch(err) {
       setError(err instanceof Error ? err.message : 'An error occurred reading the job description.');
     } finally {
       setParsingMessage(null);
     }
-  }, []);
+  }, [jobDescriptionText]);
+
+  const handleJdTextChange = (text: string) => {
+    setJobDescriptionText(text);
+    if (jobDescriptionFile) {
+      setJobDescriptionFile(null); // Clear file if user starts typing
+    }
+  };
+
+  const handleUrlAdd = async (
+    url: string,
+    onSuccess: (file: File, text: string) => void
+  ) => {
+    setParsingMessage('Fetching from URL...');
+    setError(null);
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch from URL: ${response.statusText}. The server might be down or blocking the request (CORS policy).`);
+        }
+        const blob = await response.blob();
+        
+        const fileName = url.substring(url.lastIndexOf('/') + 1).split('?')[0] || 'file_from_url';
+        const file = new File([blob], fileName, { type: blob.type });
+
+        const isPdf = file.type === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf');
+        
+        const text = isPdf
+            ? await readPdfBlobAsText(blob)
+            : await readFileBlobAsText(blob);
+        
+        onSuccess(file, text);
+
+    } catch (err) {
+        let message = 'An error occurred fetching the URL.';
+        if (err instanceof Error) {
+            message = err.message;
+        }
+        if (err instanceof TypeError && err.message.includes('Failed to fetch')) {
+            message = 'Could not fetch the URL. This may be due to the server\'s CORS policy, which prevents cross-origin requests. The file must be on a server that allows requests from this page.'
+        }
+        setError(message);
+    } finally {
+        setParsingMessage(null);
+    }
+  };
+
+  const handleResumeUrlAdd = (url: string) => {
+    return handleUrlAdd(url, (file) => {
+        // Add file to the list; the useEffect on resumeFiles will handle processing.
+        setResumeFiles(prev => [...prev, file]);
+    });
+  };
+
+  const handleJdUrlAdd = (url: string) => {
+      return handleUrlAdd(url, (file, text) => {
+          setJobDescriptionText(text);
+          setJobDescriptionFile(file);
+      });
+  };
   
   useEffect(() => {
     handleResumeFilesRead(resumeFiles);
@@ -178,15 +294,20 @@ const App: React.FC = () => {
               files={resumeFiles}
               setFiles={setResumeFiles}
               acceptedFileTypes=".pdf, .txt, .md"
-              isParsing={parsingMessage?.includes('resume')}
+              isParsing={parsingMessage?.includes('resume') || parsingMessage?.includes('candidate')}
+              onAddUrl={handleResumeUrlAdd}
               multiple
             />
             <FileUploadCard
               title="Upload Job Description"
               files={jobDescriptionFile ? [jobDescriptionFile] : []}
               setFiles={(files) => setJobDescriptionFile(files[0] || null)}
-              acceptedFileTypes=".txt, .md"
+              acceptedFileTypes=".pdf, .txt, .md"
               isParsing={parsingMessage?.includes('Job Description')}
+              onAddUrl={handleJdUrlAdd}
+              allowPlainText
+              plainTextValue={jobDescriptionText}
+              onTextChange={handleJdTextChange}
             />
           </div>
           
@@ -207,7 +328,7 @@ const App: React.FC = () => {
                   {parsingMessage || 'Analyzing...'}
                 </>
               ) : (
-                `Analyze ${resumeFiles.length > 0 ? resumeFiles.length : ''} Candidate(s)`
+                `Analyze ${resumeTexts.length > 0 ? resumeTexts.length : ''} Candidate(s)`
               )}
             </button>
           </div>

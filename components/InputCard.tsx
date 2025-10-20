@@ -8,14 +8,38 @@ interface FileUploadCardProps {
   acceptedFileTypes: string;
   isParsing: boolean;
   multiple?: boolean;
+  onAddUrl?: (url: string) => Promise<void>;
+  allowPlainText?: boolean;
+  plainTextValue?: string;
+  onTextChange?: (text: string) => void;
 }
 
-export const FileUploadCard: React.FC<FileUploadCardProps> = ({ title, files, setFiles, acceptedFileTypes, isParsing, multiple = false }) => {
+export const FileUploadCard: React.FC<FileUploadCardProps> = ({ 
+  title, 
+  files, 
+  setFiles, 
+  acceptedFileTypes, 
+  isParsing, 
+  multiple = false, 
+  onAddUrl,
+  allowPlainText = false,
+  plainTextValue = '',
+  onTextChange 
+}) => {
   const [isDragging, setIsDragging] = useState(false);
+  const [url, setUrl] = useState('');
+  const [isUrlProcessing, setIsUrlProcessing] = useState(false);
   
   const handleFileChange = (newFiles: FileList | null) => {
     if (newFiles && newFiles.length > 0) {
-      setFiles(multiple ? [...files, ...Array.from(newFiles)] : Array.from(newFiles));
+      if (onTextChange) onTextChange(''); // Clear text area on file upload
+      const fileArray = Array.from(newFiles);
+      if (multiple) {
+        setFiles([...files, ...fileArray]);
+      } else {
+        // For single file upload, replace the existing file.
+        setFiles(fileArray);
+      }
     }
   };
 
@@ -56,6 +80,18 @@ export const FileUploadCard: React.FC<FileUploadCardProps> = ({ title, files, se
     setFiles([]);
   };
 
+  const handleAddUrl = async () => {
+    if (!url || !onAddUrl) return;
+    setIsUrlProcessing(true);
+    try {
+        if (onTextChange) onTextChange(''); // Clear text area on URL add
+        await onAddUrl(url);
+        setUrl('');
+    } finally {
+        setIsUrlProcessing(false);
+    }
+  };
+
   const hasFiles = files.length > 0;
 
   return (
@@ -82,6 +118,7 @@ export const FileUploadCard: React.FC<FileUploadCardProps> = ({ title, files, se
           onChange={onFileInputChange}
           id={`file-upload-${title.replace(/\s+/g, '-')}`}
           multiple={multiple}
+          disabled={isParsing}
         />
         
         {isParsing ? (
@@ -115,6 +152,50 @@ export const FileUploadCard: React.FC<FileUploadCardProps> = ({ title, files, se
           </label>
         )}
       </div>
+
+      {onAddUrl && (
+        <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+          <label htmlFor={`url-input-${title.replace(/\s+/g, '-')}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 text-left">
+            Or add from URL
+          </label>
+          <div className="flex items-center space-x-2">
+            <input
+              type="url"
+              id={`url-input-${title.replace(/\s+/g, '-')}`}
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://example.com/job-description.pdf"
+              className="flex-grow block w-full px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+              disabled={isUrlProcessing || isParsing}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddUrl()}
+            />
+            <button
+              onClick={handleAddUrl}
+              disabled={!url || isUrlProcessing || isParsing}
+              className="inline-flex items-center justify-center px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors duration-200 w-20"
+            >
+              {isUrlProcessing ? <ArrowPathIcon className="animate-spin h-5 w-5" /> : 'Add'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {allowPlainText && onTextChange && (
+        <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+           <label htmlFor={`text-input-${title.replace(/\s+/g, '-')}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 text-left">
+            Or paste plain text
+          </label>
+          <textarea
+            id={`text-input-${title.replace(/\s+/g, '-')}`}
+            value={plainTextValue}
+            onChange={(e) => onTextChange(e.target.value)}
+            placeholder="Paste the job description here..."
+            className="block w-full px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+            rows={6}
+            disabled={isParsing}
+          />
+        </div>
+      )}
     </div>
   );
 };
