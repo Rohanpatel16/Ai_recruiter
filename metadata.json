@@ -1,0 +1,5 @@
+{
+  "name": "AI Resume-CV Analyzer",
+  "description": "An intelligent application that uses Google Gemini to compare a candidate's resume against a job description, providing a relevancy score and a hiring recommendation.",
+  "requestFramePermissions": []
+}
