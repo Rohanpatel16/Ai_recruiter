@@ -122,7 +122,7 @@ const App: React.FC = () => {
   const [jobDescriptionFile, setJobDescriptionFile] = useState<File | null>(null);
   const [jobDescriptionText, setJobDescriptionText] = useState<string>('');
   
-  const [analysisResults, setAnalysisResults] = useState<{ name: string; result: AnalysisResult; }[]>([]);
+  const [analysisResults, setAnalysisResults] = useState<{ id: string; name: string; result: AnalysisResult; }[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
@@ -193,7 +193,7 @@ const App: React.FC = () => {
               .filter((r): r is { status: 'fulfilled'; value: AnalysisResult; id: string } => r.status === 'fulfilled')
               .map(r => {
                 updateResumeStatus(r.id, { status: 'done', candidateName: r.value.candidateName });
-                return { name: r.value.candidateName, result: r.value };
+                return { id: r.id, name: r.value.candidateName, result: r.value };
               });
             
             const failedResults = settledResults.filter((r): r is { name: string; status: 'rejected'; reason: any; id: string } => r.status === 'rejected');

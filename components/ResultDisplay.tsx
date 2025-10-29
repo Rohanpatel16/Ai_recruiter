@@ -6,6 +6,11 @@ import {
     ExclamationTriangleIcon, UserCircleIcon, ViewColumnsIcon, ChevronUpIcon, ChevronDownIcon, ChevronUpDownIcon, ClipboardDocumentIcon 
 } from './Icons';
 
+type ResultItem = {
+    id: string;
+    name: string;
+    result: AnalysisResult;
+};
 
 const RecommendationBadge: React.FC<{ recommendation: AnalysisResult['recommendation'] }> = ({ recommendation }) => {
     const baseClasses = "inline-flex items-center px-4 py-1.5 text-sm font-bold rounded-full gap-2";
@@ -152,7 +157,7 @@ export const ResultDisplay: React.FC<{ name: string, result: AnalysisResult }> =
 type SortKey = 'name' | 'score';
 type SortDirection = 'asc' | 'desc';
 
-const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult; }[] }> = ({ results }) => {
+const ComparisonView: React.FC<{ results: ResultItem[] }> = ({ results }) => {
     const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: SortDirection }>({ key: 'score', direction: 'desc' });
     const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
     const [selectedRows, setSelectedRows] = useState<string[]>([]);
@@ -185,7 +190,7 @@ const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult
 
     useEffect(() => {
         // Automatically select all candidates when the component loads
-        setSelectedRows(results.map(r => r.name));
+        setSelectedRows(results.map(r => r.id));
     }, [results]);
 
     useEffect(() => {
@@ -208,22 +213,22 @@ const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult
         setSortConfig({ key, direction });
     };
 
-    const handleSelectRow = (name: string) => {
+    const handleSelectRow = (id: string) => {
         setSelectedRows(prev => 
-            prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]
+            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
         );
     };
 
     const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.checked) {
-            setSelectedRows(results.map(r => r.name));
+            setSelectedRows(results.map(r => r.id));
         } else {
             setSelectedRows([]);
         }
     };
 
     const handleCopyToClipboard = useCallback(async () => {
-        const resultsToCopy = sortedResults.filter(r => selectedRows.includes(r.name));
+        const resultsToCopy = sortedResults.filter(r => selectedRows.includes(r.id));
         if (resultsToCopy.length === 0) return;
 
         const generateHtmlTable = (resultsToCopy: typeof sortedResults) => {
@@ -349,8 +354,8 @@ const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult
     }, [copyStatus, selectedRows.length]);
 
     return (
-        <div className="p-1 md:p-2">
-             <div className="flex justify-end p-2">
+        <div className="p-4 md:p-6">
+             <div className="flex justify-end mb-4">
                 <button
                     onClick={handleCopyToClipboard}
                     disabled={copyStatus === 'copied' || selectedRows.length === 0}
@@ -368,7 +373,7 @@ const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult
                                 <input
                                     type="checkbox"
                                     ref={selectAllCheckboxRef}
-                                    checked={selectedRows.length > 0 && selectedRows.length === results.length}
+                                    checked={results.length > 0 && selectedRows.length === results.length}
                                     onChange={handleSelectAll}
                                     className="h-4 w-4 rounded border-gray-300 dark:border-gray-500 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:ring-offset-gray-800"
                                     aria-label="Select all candidates"
@@ -383,13 +388,13 @@ const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult
                         </tr>
                     </thead>
                     <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                        {sortedResults.map(({ name, result }) => (
-                            <tr key={name} className={selectedRows.includes(name) ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''}>
+                        {sortedResults.map(({ id, name, result }) => (
+                            <tr key={id} className={selectedRows.includes(id) ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''}>
                                 <td className="px-4 py-4">
                                      <input
                                         type="checkbox"
-                                        checked={selectedRows.includes(name)}
-                                        onChange={() => handleSelectRow(name)}
+                                        checked={selectedRows.includes(id)}
+                                        onChange={() => handleSelectRow(id)}
                                         className="h-4 w-4 rounded border-gray-300 dark:border-gray-500 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:ring-offset-gray-800"
                                         aria-label={`Select candidate ${name}`}
                                     />
@@ -416,7 +421,7 @@ const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult
 };
 
 
-export const MultiResultDisplay: React.FC<{ results: { name: string; result: AnalysisResult; }[] }> = ({ results }) => {
+export const MultiResultDisplay: React.FC<{ results: ResultItem[] }> = ({ results }) => {
     const [activeIndex, setActiveIndex] = useState(0);
     const [view, setView] = useState<'individual' | 'comparison'>('individual');
 
@@ -465,7 +470,7 @@ export const MultiResultDisplay: React.FC<{ results: { name: string; result: Ana
                         <nav className="-mb-px flex space-x-4 overflow-x-auto p-4" aria-label="Tabs">
                             {results.map((item, index) => (
                                 <button
-                                    key={item.name}
+                                    key={item.id}
                                     onClick={() => setActiveIndex(index)}
                                     className={`
                                         ${activeIndex === index
