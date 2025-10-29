@@ -1,5 +1,6 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { analyzeResume, extractCandidateName } from './services/geminiService';
+
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import { analyzeResume } from './services/geminiService';
 import type { AnalysisResult } from './types';
 import { FileUploadCard } from './components/InputCard';
 import { MultiResultDisplay } from './components/ResultDisplay';
@@ -10,6 +11,19 @@ declare global {
     pdfjsLib: any;
   }
 }
+
+export type FileStatus = 'queued' | 'parsing' | 'ready' | 'analyzing' | 'done' | 'error';
+
+export interface ResumeFile {
+  id: string; // Unique ID like `file.name-file.size-file.lastModified`
+  file: File;
+  status: FileStatus;
+  text: string;
+  candidateName: string; // Starts as file.name, gets updated after analysis
+  error?: string;
+}
+
+const BATCH_SIZE = 5;
 
 const readFileAsText = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -49,29 +63,35 @@ const readPdfAsText = (file: File): Promise<string> => {
     });
 };
 
-const readPdfBlobAsText = async (blob: Blob): Promise<string> => {
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.worker.mjs`;
-    try {
-        const arrayBuffer = await blob.arrayBuffer();
-        const typedArray = new Uint8Array(arrayBuffer);
-        const pdf = await window.pdfjsLib.getDocument(typedArray).promise;
-        const pagesPromises = Array.from({ length: pdf.numPages }, (_, i) => pdf.getPage(i + 1));
-        const pages = await Promise.all(pagesPromises);
-        let fullText = '';
-        for (const page of pages) {
-            const textContent = await page.getTextContent();
-            fullText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
+const readBlobAsText = (blob: Blob, isPdf: boolean): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        if (isPdf) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.worker.mjs`;
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+                if (!event.target?.result) return reject(new Error('Failed to read PDF blob.'));
+                try {
+                    const typedArray = new Uint8Array(event.target.result as ArrayBuffer);
+                    const pdf = await window.pdfjsLib.getDocument(typedArray).promise;
+                    let fullText = '';
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const textContent = await page.getTextContent();
+                        fullText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
+                    }
+                    resolve(fullText);
+                } catch (err) {
+                    reject(new Error(`Failed to parse PDF from blob.`));
+                }
+            };
+            reader.onerror = () => reject(new Error(`Error reading blob.`));
+            reader.readAsArrayBuffer(blob);
+        } else {
+            blob.text().then(resolve).catch(reject);
         }
-        return fullText;
-    } catch (err) {
-        console.error("PDF Parsing Error:", err);
-        throw new Error(`Failed to parse PDF from blob. It might be corrupted.`);
-    }
+    });
 };
 
-const readFileBlobAsText = (blob: Blob): Promise<string> => {
-    return blob.text();
-};
 
 const Loader: React.FC<{ message: string; subMessage?: string; }> = ({ message, subMessage }) => (
     <div className="flex flex-col items-center justify-center h-full">
@@ -98,119 +118,107 @@ const Loader: React.FC<{ message: string; subMessage?: string; }> = ({ message, 
 
 
 const App: React.FC = () => {
-  const [resumeFiles, setResumeFiles] = useState<File[]>([]);
+  const [resumes, setResumes] = useState<ResumeFile[]>([]);
   const [jobDescriptionFile, setJobDescriptionFile] = useState<File | null>(null);
-  
-  const [resumeTexts, setResumeTexts] = useState<{ name: string; text: string; }[]>([]);
   const [jobDescriptionText, setJobDescriptionText] = useState<string>('');
   
   const [analysisResults, setAnalysisResults] = useState<{ name: string; result: AnalysisResult; }[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
+  const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
-  const [parsingMessage, setParsingMessage] = useState<string | null>(null);
+
+  const updateResumeStatus = useCallback((id: string, status: Partial<ResumeFile>) => {
+    setResumes(prev => prev.map(r => r.id === id ? { ...r, ...status } : r));
+  }, []);
+
+  // Process queued resumes for parsing
+  useEffect(() => {
+    const queuedResumes = resumes.filter(r => r.status === 'queued');
+    if (queuedResumes.length === 0) return;
+
+    const processBatch = async () => {
+        const batch = queuedResumes.slice(0, BATCH_SIZE);
+        for (const resume of batch) {
+            updateResumeStatus(resume.id, { status: 'parsing' });
+            try {
+                const text = resume.file.type === 'application/pdf'
+                    ? await readPdfAsText(resume.file)
+                    : await readFileAsText(resume.file);
+
+                const isDuplicate = resumes.some(r => r.id !== resume.id && r.text && r.text === text);
+                if (isDuplicate) {
+                    throw new Error('Duplicate content detected.');
+                }
+
+                updateResumeStatus(resume.id, { text, status: 'ready' });
+            } catch (err) {
+                const message = err instanceof Error ? err.message : 'Failed to parse file.';
+                updateResumeStatus(resume.id, { status: 'error', error: message });
+            }
+        }
+    };
+    processBatch();
+  }, [resumes, updateResumeStatus]);
+  
 
   const handleAnalyze = useCallback(async () => {
-    if (resumeTexts.length === 0 || !jobDescriptionText) {
-      setError('Please provide at least one resume and a job description.');
+    const resumesToAnalyze = resumes.filter(r => r.status === 'ready');
+    if (resumesToAnalyze.length === 0 || !jobDescriptionText) {
+      setError('Please provide at least one valid resume and a job description.');
       return;
     }
     setError(null);
     setLoading(true);
     setAnalysisResults([]);
+
+    resumesToAnalyze.forEach(r => updateResumeStatus(r.id, { status: 'analyzing' }));
+
+    const totalBatches = Math.ceil(resumesToAnalyze.length / BATCH_SIZE);
+    
     try {
-      const analysisPromises = resumeTexts.map(resume =>
-        analyzeResume(resume.text, jobDescriptionText)
-          .then(result => ({ name: resume.name, status: 'fulfilled' as const, value: result }))
-          .catch(error => ({ name: resume.name, status: 'rejected' as const, reason: error }))
-      );
+        for (let i = 0; i < resumesToAnalyze.length; i += BATCH_SIZE) {
+            const batch = resumesToAnalyze.slice(i, i + BATCH_SIZE);
+            const currentBatchNum = i / BATCH_SIZE + 1;
+            setLoadingMessage(`Analyzing batch ${currentBatchNum} of ${totalBatches}...`);
 
-      const settledResults = await Promise.all(analysisPromises);
-      
-      const successfulResults = settledResults
-        .filter((r): r is { name: string; status: 'fulfilled'; value: AnalysisResult } => r.status === 'fulfilled')
-        .map(r => ({ name: r.name, result: r.value }));
-      
-      const failedResults = settledResults.filter(r => r.status === 'rejected');
+            const batchPromises = batch.map(resume =>
+              analyzeResume(resume.text, jobDescriptionText)
+                .then(result => ({ status: 'fulfilled' as const, value: result, id: resume.id }))
+                .catch(error => ({ name: resume.candidateName, status: 'rejected' as const, reason: error, id: resume.id }))
+            );
+            
+            const settledResults = await Promise.all(batchPromises);
 
-      setAnalysisResults(successfulResults);
+            const successfulResults = settledResults
+              .filter((r): r is { status: 'fulfilled'; value: AnalysisResult; id: string } => r.status === 'fulfilled')
+              .map(r => {
+                updateResumeStatus(r.id, { status: 'done', candidateName: r.value.candidateName });
+                return { name: r.value.candidateName, result: r.value };
+              });
+            
+            const failedResults = settledResults.filter((r): r is { name: string; status: 'rejected'; reason: any; id: string } => r.status === 'rejected');
+            failedResults.forEach(r => {
+                const message = r.reason instanceof Error ? r.reason.message : 'Analysis failed.';
+                updateResumeStatus(r.id, { status: 'error', error: message });
+            });
 
-      if (failedResults.length > 0) {
-        const errorMsg = `Failed to analyze ${failedResults.length} resume(s): ${failedResults.map(r => r.name).join(', ')}.`;
-        setError(errorMsg);
-        console.error("Analysis failures:", failedResults);
-      }
+            setAnalysisResults(prev => [...prev, ...successfulResults]);
+        }
 
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred during analysis.');
     } finally {
       setLoading(false);
+      setLoadingMessage('');
     }
-  }, [resumeTexts, jobDescriptionText]);
+  }, [resumes, jobDescriptionText, updateResumeStatus]);
 
-  const handleResumeFilesRead = useCallback(async (files: File[]) => {
-    if (files.length === 0) {
-        setResumeTexts([]);
-        return;
-    }
-    setParsingMessage(`Parsing ${files.length} resume(s)...`);
-    setError(null);
-    setResumeTexts([]);
-
-    try {
-        // 1. Parse files to get text
-        const fileReadPromises = files.map(file => {
-            const promise = file.type === 'application/pdf'
-                ? readPdfAsText(file)
-                : readFileAsText(file);
-            return promise.then(text => ({ originalName: file.name, text }));
-        });
-        const parsedFiles = await Promise.all(fileReadPromises);
-
-        // 2. Extract names using Gemini if there are files
-        if (parsedFiles.length > 0) {
-            setParsingMessage(`Extracting candidate names...`);
-            const nameExtractionPromises = parsedFiles.map(parsedFile =>
-                extractCandidateName(parsedFile.text)
-                    .catch(err => {
-                        console.error(`Failed to extract name for ${parsedFile.originalName}:`, err);
-                        return parsedFile.originalName; // Fallback to original filename on error
-                    })
-            );
-            const extractedNames = await Promise.all(nameExtractionPromises);
-
-            // 3. Ensure names are unique for display
-            const finalNames: string[] = [];
-            extractedNames.forEach(name => {
-                let newName = name;
-                let counter = 1;
-                while (finalNames.includes(newName)) {
-                    newName = `${name} (${counter})`;
-                    counter++;
-                }
-                finalNames.push(newName);
-            });
-            
-            // 4. Set state with new names
-            const newResumeTexts = parsedFiles.map((parsedFile, index) => ({
-                name: finalNames[index],
-                text: parsedFile.text,
-            }));
-            setResumeTexts(newResumeTexts);
-        }
-    } catch (err) {
-        setError(err instanceof Error ? err.message : 'An error occurred during file processing.');
-    } finally {
-        setParsingMessage(null);
-    }
-  }, []);
-
+  
   const handleJdFileRead = useCallback(async (file: File | null) => {
     if (!file) {
-      // Don't clear text if there's no file, allows for plain text entry
       if (!jobDescriptionText) setJobDescriptionText('');
       return;
     }
-    setParsingMessage('Parsing Job Description...');
     setError(null);
     try {
       const text = file.type === 'application/pdf'
@@ -219,28 +227,101 @@ const App: React.FC = () => {
       setJobDescriptionText(text);
     } catch(err) {
       setError(err instanceof Error ? err.message : 'An error occurred reading the job description.');
-    } finally {
-      setParsingMessage(null);
     }
   }, [jobDescriptionText]);
 
   const handleJdTextChange = (text: string) => {
     setJobDescriptionText(text);
     if (jobDescriptionFile) {
-      setJobDescriptionFile(null); // Clear file if user starts typing
+      setJobDescriptionFile(null);
+    }
+  };
+  
+  type FileData = File | { file: File; name?: string };
+
+  const addResumeFiles = (filesToAdd: FileData[]) => {
+    const newResumeFiles = filesToAdd
+        .map(item => {
+            const file = item instanceof File ? item : item.file;
+            const name = !(item instanceof File) ? item.name : undefined;
+            const id = `${file.name}-${file.size}-${file.lastModified}`;
+            if (resumes.some(r => r.id === id)) return null; // Prevent adding the exact same file object
+            return {
+                id,
+                file,
+                status: 'queued' as FileStatus,
+                text: '',
+                candidateName: name || file.name,
+            };
+        })
+        .filter((f): f is ResumeFile => f !== null);
+
+    setResumes(prev => [...prev, ...newResumeFiles]);
+  };
+
+  const removeResume = (id: string) => {
+    setResumes(prev => prev.filter(r => r.id !== id));
+  };
+  
+  const clearResumes = () => {
+    setResumes([]);
+  }
+
+  const handleUrlsAdd = async (urls: string[]) => {
+    setError(null);
+    
+    const filesData: { file: File; name: string }[] = [];
+    
+    for (const url of urls) {
+        try {
+            let resumeUrl = url;
+            let candidateNameFromApi: string | undefined;
+
+            if (url.startsWith('https://tigihr.com/talent/')) {
+                const profileId = url.split('/').filter(p => p).pop();
+                if (profileId) {
+                    const profileResponse = await fetch('https://api-v1.tigihr.com/profile/getProfileBaseUserDetail', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ profile_id: profileId }),
+                    });
+                    if (!profileResponse.ok) throw new Error(`TigiHR API failed: ${profileResponse.statusText}`);
+                    const profileData = await profileResponse.json();
+                    if (profileData.isError || !profileData.data?.resume_path) {
+                        throw new Error('Could not find resume in TigiHR profile.');
+                    }
+                    resumeUrl = profileData.data.resume_path;
+                    candidateNameFromApi = profileData.data.full_name;
+                } else {
+                    throw new Error('Invalid TigiHR URL.');
+                }
+            }
+
+            const response = await fetch(resumeUrl);
+            if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+            
+            const blob = await response.blob();
+            const fileName = resumeUrl.substring(resumeUrl.lastIndexOf('/') + 1).split('?')[0] || 'file_from_url';
+            const file = new File([blob], fileName, { type: blob.type });
+            filesData.push({ file, name: candidateNameFromApi || fileName });
+
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'An error occurred fetching URL.';
+            setError(`Failed to fetch ${url}: ${message}`);
+        }
+    }
+    
+    if (filesData.length > 0) {
+        addResumeFiles(filesData);
     }
   };
 
-  const handleUrlAdd = async (
-    url: string,
-    onSuccess: (file: File, text: string) => void
-  ) => {
-    setParsingMessage('Fetching from URL...');
-    setError(null);
-    try {
+  const handleJdUrlAdd = async (url: string) => {
+      setError(null);
+      try {
         const response = await fetch(url);
         if (!response.ok) {
-            throw new Error(`Failed to fetch from URL: ${response.statusText}. The server might be down or blocking the request (CORS policy).`);
+            throw new Error(`Failed to fetch from URL: ${response.statusText}.`);
         }
         const blob = await response.blob();
         
@@ -248,51 +329,27 @@ const App: React.FC = () => {
         const file = new File([blob], fileName, { type: blob.type });
 
         const isPdf = file.type === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf');
+        const text = await readBlobAsText(blob, isPdf);
         
-        const text = isPdf
-            ? await readPdfBlobAsText(blob)
-            : await readFileBlobAsText(blob);
-        
-        onSuccess(file, text);
+        setJobDescriptionText(text);
+        setJobDescriptionFile(file);
 
     } catch (err) {
-        let message = 'An error occurred fetching the URL.';
-        if (err instanceof Error) {
-            message = err.message;
-        }
+        let message = err instanceof Error ? err.message : 'An error occurred fetching the URL.';
         if (err instanceof TypeError && err.message.includes('Failed to fetch')) {
-            message = 'Could not fetch the URL. This may be due to the server\'s CORS policy, which prevents cross-origin requests. The file must be on a server that allows requests from this page.'
+            message = 'Could not fetch the URL. This may be due to a CORS policy.'
         }
         setError(message);
-    } finally {
-        setParsingMessage(null);
     }
   };
-
-  const handleResumeUrlAdd = (url: string) => {
-    return handleUrlAdd(url, (file) => {
-        // Add file to the list; the useEffect on resumeFiles will handle processing.
-        setResumeFiles(prev => [...prev, file]);
-    });
-  };
-
-  const handleJdUrlAdd = (url: string) => {
-      return handleUrlAdd(url, (file, text) => {
-          setJobDescriptionText(text);
-          setJobDescriptionFile(file);
-      });
-  };
   
-  useEffect(() => {
-    handleResumeFilesRead(resumeFiles);
-  }, [resumeFiles, handleResumeFilesRead]);
-
   useEffect(() => {
     handleJdFileRead(jobDescriptionFile);
   }, [jobDescriptionFile, handleJdFileRead]);
 
-  const isProcessing = loading || !!parsingMessage;
-  const canAnalyze = resumeTexts.length > 0 && jobDescriptionText && !isProcessing;
+  const readyResumesCount = useMemo(() => resumes.filter(r => ['ready', 'done'].includes(r.status)).length, [resumes]);
+  const isProcessing = useMemo(() => resumes.some(r => ['queued', 'parsing'].includes(r.status)), [resumes]);
+  const canAnalyze = readyResumesCount > 0 && !!jobDescriptionText && !isProcessing && !loading;
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-sans antialiased">
@@ -307,18 +364,19 @@ const App: React.FC = () => {
               AI Resume Analyzer
             </h1>
             <p className="mt-2 text-gray-500 dark:text-gray-400">
-              Upload multiple resumes and one job description to compare.
+              Upload resumes and one job description to compare.
             </p>
           </header>
 
           <div className="space-y-6 flex-grow">
             <FileUploadCard
               title="Upload Resumes"
-              files={resumeFiles}
-              setFiles={setResumeFiles}
+              resumes={resumes}
+              onAddFiles={(files) => addResumeFiles(files)}
+              onRemoveResume={removeResume}
+              onClearResumes={clearResumes}
               acceptedFileTypes=".pdf, .txt, .md"
-              isParsing={parsingMessage?.includes('resume') || parsingMessage?.includes('candidate')}
-              onAddUrl={handleResumeUrlAdd}
+              onAddUrls={handleUrlsAdd}
               multiple
             />
             <FileUploadCard
@@ -326,7 +384,6 @@ const App: React.FC = () => {
               files={jobDescriptionFile ? [jobDescriptionFile] : []}
               setFiles={(files) => setJobDescriptionFile(files[0] || null)}
               acceptedFileTypes=".pdf, .txt, .md"
-              isParsing={parsingMessage?.includes('Job Description')}
               onAddUrl={handleJdUrlAdd}
               allowPlainText
               plainTextValue={jobDescriptionText}
@@ -338,6 +395,9 @@ const App: React.FC = () => {
             {error && (
               <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md relative mb-4" role="alert">
                   <span className="block sm:inline">{error}</span>
+                  <button onClick={() => setError(null)} className="absolute top-0 bottom-0 right-0 px-4 py-3">
+                    <span className="text-2xl">&times;</span>
+                  </button>
               </div>
             )}
             <button
@@ -345,13 +405,13 @@ const App: React.FC = () => {
               disabled={!canAnalyze}
               className="w-full inline-flex items-center justify-center px-8 py-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed transition-all duration-300 transform hover:scale-105 disabled:scale-100"
             >
-              {isProcessing ? (
+              {isProcessing || loading ? (
                 <>
                   <ArrowPathIcon className="animate-spin h-5 w-5 mr-3" />
-                  {parsingMessage || 'Analyzing...'}
+                  {loading ? loadingMessage : 'Processing resumes...'}
                 </>
               ) : (
-                `Analyze ${resumeTexts.length > 0 ? resumeTexts.length : ''} Candidate(s)`
+                `Analyze ${readyResumesCount > 0 ? readyResumesCount : ''} Candidate(s)`
               )}
             </button>
           </div>
@@ -359,9 +419,9 @@ const App: React.FC = () => {
 
         {/* Right Panel: Results */}
         <div className="w-full lg:w-2/3 p-6 md:p-12 lg:h-screen lg:overflow-y-auto">
-          {loading ? (
+          {loading && analysisResults.length === 0 ? (
              <Loader 
-                message={`Gemini is analyzing ${resumeTexts.length} document(s)...`}
+                message={loadingMessage || `Gemini is analyzing documents...`}
                 subMessage="This might take a moment."
              />
           ) : analysisResults.length > 0 ? (

@@ -6,6 +6,10 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 const responseSchema = {
   type: Type.OBJECT,
   properties: {
+    candidateName: {
+        type: Type.STRING,
+        description: "The full name of the candidate as found in the resume."
+    },
     relevancyScore: {
       type: Type.INTEGER,
       description: "A relevancy score from 0 to 100 representing how well the resume matches the job description.",
@@ -43,49 +47,8 @@ const responseSchema = {
       description: "A list of 3-5 tailored interview questions to ask the candidate based on the analysis, particularly focusing on their potential weaknesses or areas that need further clarification."
     }
   },
-  required: ["relevancyScore", "recommendation", "summary", "pros", "cons", "redFlags", "finalVerdict", "interviewQuestions"],
+  required: ["candidateName", "relevancyScore", "recommendation", "summary", "pros", "cons", "redFlags", "finalVerdict", "interviewQuestions"],
 };
-
-const nameSchema = {
-    type: Type.OBJECT,
-    properties: {
-        fullName: {
-            type: Type.STRING,
-            description: "The full name of the candidate as found in the resume."
-        }
-    },
-    required: ["fullName"]
-};
-
-export async function extractCandidateName(resumeText: string): Promise<string> {
-    const prompt = `From the provided resume text, extract the full name of the candidate. Respond with a JSON object containing a single key 'fullName'. For example: {"fullName": "Jane Doe"}.
-
-    **Resume Text:**
-    ---
-    ${resumeText.substring(0, 2000)}
-    ---
-    `;
-    try {
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: nameSchema,
-                temperature: 0,
-            }
-        });
-        const jsonText = response.text.trim();
-        const parsedResult = JSON.parse(jsonText);
-        if (typeof parsedResult.fullName === 'string' && parsedResult.fullName.length > 0) {
-            return parsedResult.fullName;
-        }
-        throw new Error('Full name not found or is invalid.');
-    } catch (error) {
-        console.error("Error extracting candidate name:", error);
-        throw new Error("Failed to extract candidate name from resume.");
-    }
-}
 
 export async function analyzeResume(resume: string, jobDescription: string): Promise<AnalysisResult> {
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -122,8 +85,9 @@ ${resume}
 
 You must follow these steps in order to arrive at your conclusions:
 
-**Step 1: Deconstruct the Job Description**
-First, identify the core requirements from the job description. Categorize them into:
+**Step 1: Extract Candidate Name & Deconstruct Job Description**
+- First, identify and extract the candidate's full name from the resume text for the \`candidateName\` field.
+- Then, identify the core requirements from the job description. Categorize them into:
 - **Must-Have Skills:** Essential technologies, languages, or qualifications explicitly stated as required (e.g., "5+ years of Python," "expertise in AWS," "must have a Bachelor's degree").
 - **Nice-to-Have Skills:** Preferred but not essential skills (e.g., "familiarity with Docker is a plus," "experience with Agile methodologies").
 
@@ -146,7 +110,7 @@ You will now calculate the relevancy score based on a 100-point weighted system.
 
 The **final relevancy score** is the sum of the points from these three categories.
 
-**Step 2.5: Red Flag Identification (Critical)**
+**Step 3: Red Flag Identification (Critical)**
 - After scoring, meticulously scan the resume's timeline for potential red flags. Your goal is to identify patterns that might indicate instability or concern.
 - **Date Inaccuracies:** Check for any employment or education dates that are in the future (after today's date). This is a critical error.
 - **Employment Gaps:** Look for unexplained gaps between employment periods that are longer than 6 months.
@@ -155,7 +119,7 @@ The **final relevancy score** is the sum of the points from these three categori
 - **Vague Descriptions:** Identify job descriptions that are overly generic or lack specific, measurable achievements.
 - If any red flags are identified, list them clearly in the \`redFlags\` array. If none are found, return an empty array \`[]\`.
 
-**Step 3: Synthesize and Justify**
+**Step 4: Synthesize and Justify**
 - **Summary:** Write a brief, 2-3 sentence executive summary of your findings.
 - **Strengths & Weaknesses:** Based on your rubric analysis, list the specific points of alignment (Strengths) and misalignment (Weaknesses/Gaps). Every point MUST be tied to evidence.
 - **Recommendation:** Based on the final score, provide your recommendation ("Strong Hire," "Consider," or "Reject"). Use this scoring guide:
@@ -163,8 +127,8 @@ The **final relevancy score** is the sum of the points from these three categori
     - **60-84:** Consider
     - **0-59:** Reject
 
-**Step 4: Generate Probing Interview Questions**
-- Create 3-5 interview questions that **directly target the identified 'Weaknesses / Gaps'** from Step 3. The purpose of these questions is to clarify ambiguities and assess the severity of the identified gaps.
+**Step 5: Generate Probing Interview Questions**
+- Create 3-5 interview questions that **directly target the identified 'Weaknesses / Gaps'** from Step 4. The purpose of these questions is to clarify ambiguities and assess the severity of the identified gaps.
 
 # OUTPUT FORMAT
 
@@ -187,6 +151,7 @@ Provide your complete analysis in the specified JSON format. Ensure all fields a
     
     // Basic validation to ensure the response shape matches our type
     if (
+        typeof parsedResult.candidateName !== 'string' ||
         typeof parsedResult.relevancyScore !== 'number' ||
         !['Strong Hire', 'Consider', 'Reject'].includes(parsedResult.recommendation) ||
         typeof parsedResult.summary !== 'string' ||

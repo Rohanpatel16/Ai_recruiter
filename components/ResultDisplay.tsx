@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { AnalysisResult } from '../types';
 import { 
@@ -53,7 +54,7 @@ const ScoreCircle: React.FC<{ score: number }> = ({ score }) => {
 
 export const ResultDisplay: React.FC<{ name: string, result: AnalysisResult }> = ({ name, result }) => {
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-b-xl animate-fade-in">
+    <div className="bg-white dark:bg-gray-800 animate-fade-in">
         <div className="flex flex-col md:flex-row items-center justify-between gap-8 border-b border-gray-200 dark:border-gray-700 pb-6 mb-6">
             <div className="text-center md:text-left">
                 <p className="inline-block bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 font-semibold px-4 py-1.5 rounded-full text-base mb-4 truncate max-w-sm md:max-w-md lg:max-w-lg">
@@ -197,10 +198,11 @@ const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult
 
     const requestSort = (key: SortKey) => {
         let direction: SortDirection = 'asc';
-        if (sortConfig.key === key && sortConfig.direction === 'asc') {
-            direction = 'desc';
-        }
-        if (sortConfig.key !== key) {
+        if (sortConfig.key === key) {
+            // Toggle direction if the same key is clicked
+            direction = sortConfig.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+            // Set default direction for new key
             direction = key === 'score' ? 'desc' : 'asc';
         }
         setSortConfig({ key, direction });

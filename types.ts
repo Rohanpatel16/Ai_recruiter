@@ -1,5 +1,6 @@
 
 export interface AnalysisResult {
+  candidateName: string;
   relevancyScore: number;
   recommendation: 'Strong Hire' | 'Consider' | 'Reject';
   summary: string;
