@@ -73,6 +73,29 @@ const readFileBlobAsText = (blob: Blob): Promise<string> => {
     return blob.text();
 };
 
+const Loader: React.FC<{ message: string; subMessage?: string; }> = ({ message, subMessage }) => (
+    <div className="flex flex-col items-center justify-center h-full">
+      <div className="loader">
+        <svg width="100" height="100" viewBox="0 0 100 100">
+          <defs>
+            <mask id="clipping">
+              <polygon points="0,0 100,0 100,100 0,100" fill="black"></polygon>
+              <polygon points="25,25 75,25 50,75" fill="white"></polygon>
+              <polygon points="50,25 75,75 25,75" fill="white"></polygon>
+              <polygon points="35,35 65,35 50,65" fill="white"></polygon>
+              <polygon points="35,35 65,35 50,65" fill="white"></polygon>
+              <polygon points="35,35 65,35 50,65" fill="white"></polygon>
+              <polygon points="35,35 65,35 50,65" fill="white"></polygon>
+            </mask>
+          </defs>
+        </svg>
+        <div className="box"></div>
+      </div>
+      <p className="mt-8 text-lg font-semibold text-gray-600 dark:text-gray-300">{message}</p>
+      {subMessage && <p className="text-gray-500 dark:text-gray-400">{subMessage}</p>}
+    </div>
+);
+
 
 const App: React.FC = () => {
   const [resumeFiles, setResumeFiles] = useState<File[]>([]);
@@ -337,11 +360,10 @@ const App: React.FC = () => {
         {/* Right Panel: Results */}
         <div className="w-full lg:w-2/3 p-6 md:p-12 lg:h-screen lg:overflow-y-auto">
           {loading ? (
-             <div className="flex flex-col items-center justify-center h-full">
-                <ArrowPathIcon className="animate-spin h-12 w-12 text-blue-500" />
-                <p className="mt-4 text-lg font-semibold text-gray-600 dark:text-gray-300">Gemini is analyzing {resumeTexts.length} document(s)...</p>
-                <p className="text-gray-500 dark:text-gray-400">This might take a moment.</p>
-             </div>
+             <Loader 
+                message={`Gemini is analyzing ${resumeTexts.length} document(s)...`}
+                subMessage="This might take a moment."
+             />
           ) : analysisResults.length > 0 ? (
             <MultiResultDisplay results={analysisResults} />
           ) : (

@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { AnalysisResult } from '../types';
 import { 
     CheckCircleIcon, XCircleIcon, ThumbUpIcon, ThumbDownIcon, MinusCircleIcon, QuestionMarkCircleIcon, 
-    ExclamationTriangleIcon, UserCircleIcon, ViewColumnsIcon, ChevronUpIcon, ChevronDownIcon, ChevronUpDownIcon 
+    ExclamationTriangleIcon, UserCircleIcon, ViewColumnsIcon, ChevronUpIcon, ChevronDownIcon, ChevronUpDownIcon, ClipboardDocumentIcon 
 } from './Icons';
 
 
@@ -153,6 +153,9 @@ type SortDirection = 'asc' | 'desc';
 
 const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult; }[] }> = ({ results }) => {
     const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: SortDirection }>({ key: 'score', direction: 'desc' });
+    const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
+    const [selectedRows, setSelectedRows] = useState<string[]>([]);
+    const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
     
     const sortedResults = useMemo(() => {
         let sortableItems = [...results];
@@ -179,6 +182,19 @@ const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult
         return sortableItems;
     }, [results, sortConfig]);
 
+    useEffect(() => {
+        // Automatically select all candidates when the component loads
+        setSelectedRows(results.map(r => r.name));
+    }, [results]);
+
+    useEffect(() => {
+        const isIndeterminate = selectedRows.length > 0 && selectedRows.length < results.length;
+        if (selectAllCheckboxRef.current) {
+            selectAllCheckboxRef.current.indeterminate = isIndeterminate;
+        }
+    }, [selectedRows, results.length]);
+
+
     const requestSort = (key: SortKey) => {
         let direction: SortDirection = 'asc';
         if (sortConfig.key === key && sortConfig.direction === 'asc') {
@@ -189,6 +205,104 @@ const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult
         }
         setSortConfig({ key, direction });
     };
+
+    const handleSelectRow = (name: string) => {
+        setSelectedRows(prev => 
+            prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]
+        );
+    };
+
+    const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.checked) {
+            setSelectedRows(results.map(r => r.name));
+        } else {
+            setSelectedRows([]);
+        }
+    };
+
+    const handleCopyToClipboard = useCallback(async () => {
+        const resultsToCopy = sortedResults.filter(r => selectedRows.includes(r.name));
+        if (resultsToCopy.length === 0) return;
+
+        const generateHtmlTable = (resultsToCopy: typeof sortedResults) => {
+            const thStyle = "padding: 12px; border: 1px solid #ddd; text-align: left; background-color: #f2f2f2; font-weight: bold;";
+            const tdStyle = "padding: 12px; border: 1px solid #ddd; vertical-align: top;";
+            const ulStyle = "margin: 0; padding-left: 20px; list-style-position: inside;";
+
+            const headers = ['Candidate', 'Score', 'Recommendation', 'Pros', 'Cons', 'Red Flags'];
+            const headerHtml = `<thead><tr>${headers.map(h => `<th style="${thStyle}">${h}</th>`).join('')}</tr></thead>`;
+            
+            const getRecommendationHtml = (rec: AnalysisResult['recommendation']) => {
+                let color = '#333';
+                if (rec === 'Strong Hire') color = '#28a745';
+                else if (rec === 'Consider') color = '#ffc107';
+                else if (rec === 'Reject') color = '#dc3545';
+                return `<span style="font-weight: bold; color: ${color};">${rec}</span>`;
+            };
+
+            const getListHtml = (items: string[]) => {
+                if (!items || items.length === 0) return '<span>None</span>';
+                return `<ul style="${ulStyle}">${items.map(item => `<li>${item}</li>`).join('')}</ul>`;
+            };
+
+            const rowsHtml = resultsToCopy.map(({ name, result }) => `
+                <tr style="border-bottom: 1px solid #ddd;">
+                    <td style="${tdStyle}">${name}</td>
+                    <td style="${tdStyle}">${result.relevancyScore}%</td>
+                    <td style="${tdStyle}">${getRecommendationHtml(result.recommendation)}</td>
+                    <td style="${tdStyle}">${getListHtml(result.pros)}</td>
+                    <td style="${tdStyle}">${getListHtml(result.cons)}</td>
+                    <td style="${tdStyle}">${getListHtml(result.redFlags)}</td>
+                </tr>
+            `).join('');
+
+            const bodyHtml = `<tbody>${rowsHtml}</tbody>`;
+
+            return `<table style="width: 100%; border-collapse: collapse; font-family: Arial, sans-serif; font-size: 14px; border: 1px solid #ddd;">${headerHtml}${bodyHtml}</table>`;
+        };
+        
+        const generatePlainText = (resultsToCopy: typeof sortedResults) => {
+            const getListText = (items: string[]) => {
+                if (!items || items.length === 0) return '  None\n';
+                return items.map(item => `  - ${item}\n`).join('');
+            };
+
+            return resultsToCopy.map(({ name, result }) => {
+                let report = `Candidate: ${name}\n`;
+                report += `Score: ${result.relevancyScore}%\n`;
+                report += `Recommendation: ${result.recommendation}\n\n`;
+                report += `Pros:\n${getListText(result.pros)}\n`;
+                report += `Cons:\n${getListText(result.cons)}\n`;
+                report += `Red Flags:\n${getListText(result.redFlags)}\n`;
+                return report;
+            }).join('---------------------------------------------------\n\n');
+        };
+
+        const htmlTableString = generateHtmlTable(resultsToCopy);
+        const plainTextString = generatePlainText(resultsToCopy);
+
+        try {
+            const htmlBlob = new Blob([htmlTableString], { type: 'text/html' });
+            const textBlob = new Blob([plainTextString], { type: 'text/plain' });
+            const item = new ClipboardItem({
+                'text/html': htmlBlob,
+                'text/plain': textBlob,
+            });
+            await navigator.clipboard.write([item]);
+            setCopyStatus('copied');
+            setTimeout(() => setCopyStatus('idle'), 2500);
+        } catch (err) {
+            console.error('Failed to copy rich text: ', err);
+            try {
+                await navigator.clipboard.writeText(plainTextString);
+                setCopyStatus('copied');
+                setTimeout(() => setCopyStatus('idle'), 2500);
+            } catch (fallbackErr) {
+                console.error('Fallback plain text copy failed: ', fallbackErr);
+                alert('Failed to copy table to clipboard.');
+            }
+        }
+    }, [sortedResults, selectedRows]);
 
     const SortableHeader: React.FC<{ sortKey: SortKey, children: React.ReactNode }> = ({ sortKey, children }) => {
         const isSorted = sortConfig.key === sortKey;
@@ -225,12 +339,39 @@ const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult
         );
     };
 
+    const copyButtonText = useMemo(() => {
+        if (copyStatus === 'copied') return 'Copied to Clipboard!';
+        if (selectedRows.length === 0) return 'Copy Selected';
+        if (selectedRows.length === 1) return 'Copy 1 Candidate';
+        return `Copy ${selectedRows.length} Candidates`;
+    }, [copyStatus, selectedRows.length]);
+
     return (
         <div className="p-1 md:p-2">
+             <div className="flex justify-end p-2">
+                <button
+                    onClick={handleCopyToClipboard}
+                    disabled={copyStatus === 'copied' || selectedRows.length === 0}
+                    className="inline-flex items-center gap-2 px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:text-gray-100 enabled:hover:scale-105 transition-all"
+                >
+                    <ClipboardDocumentIcon className="h-5 w-5" />
+                    {copyButtonText}
+                </button>
+            </div>
             <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                     <thead className="bg-gray-50 dark:bg-gray-700/50">
                         <tr>
+                            <th scope="col" className="px-4 py-3">
+                                <input
+                                    type="checkbox"
+                                    ref={selectAllCheckboxRef}
+                                    checked={selectedRows.length > 0 && selectedRows.length === results.length}
+                                    onChange={handleSelectAll}
+                                    className="h-4 w-4 rounded border-gray-300 dark:border-gray-500 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:ring-offset-gray-800"
+                                    aria-label="Select all candidates"
+                                />
+                            </th>
                             <SortableHeader sortKey="name">Candidate</SortableHeader>
                             <SortableHeader sortKey="score">Score</SortableHeader>
                             <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Recommendation</th>
@@ -241,7 +382,16 @@ const ComparisonView: React.FC<{ results: { name: string; result: AnalysisResult
                     </thead>
                     <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                         {sortedResults.map(({ name, result }) => (
-                            <tr key={name}>
+                            <tr key={name} className={selectedRows.includes(name) ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''}>
+                                <td className="px-4 py-4">
+                                     <input
+                                        type="checkbox"
+                                        checked={selectedRows.includes(name)}
+                                        onChange={() => handleSelectRow(name)}
+                                        className="h-4 w-4 rounded border-gray-300 dark:border-gray-500 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:ring-offset-gray-800"
+                                        aria-label={`Select candidate ${name}`}
+                                    />
+                                </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <div className="text-sm font-medium text-gray-900 dark:text-white">{name}</div>
                                 </td>
